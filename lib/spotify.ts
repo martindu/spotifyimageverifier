@@ -21,6 +21,10 @@ type SpotifyTrack = {
       width: number
     }>
   }
+  name: string
+  artists: Array<{
+    name: string
+  }>
 }
 
 type SpotifyAlbum = {
@@ -29,6 +33,16 @@ type SpotifyAlbum = {
     height: number
     width: number
   }>
+  name: string
+  artists: Array<{
+    name: string
+  }>
+}
+
+type SpotifySearchResponse = {
+  tracks: {
+    items: SpotifyTrack[]
+  }
 }
 
 // Get Spotify access token
@@ -54,6 +68,27 @@ async function getSpotifyToken(): Promise<string> {
 
   const data: SpotifyTokenResponse = await response.json()
   return data.access_token
+}
+
+// Search for a track by name
+async function searchTrack(songName: string): Promise<SpotifyTrack | null> {
+  const token = await getSpotifyToken()
+  
+  const response = await fetch(
+    `https://api.spotify.com/v1/search?q=${encodeURIComponent(songName)}&type=track&limit=1`,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    }
+  )
+
+  if (!response.ok) {
+    throw new Error("Failed to search for track")
+  }
+
+  const data: SpotifySearchResponse = await response.json()
+  return data.tracks.items[0] || null
 }
 
 // Extract Spotify ID from base64
@@ -86,44 +121,54 @@ function extractSpotifyId(base64String: string): { type: "track" | "album"; id: 
 }
 
 // Fetch artwork from Spotify
-export async function fetchSpotifyArt(base64String: string): Promise<{ imageUrl: string }> {
+export async function fetchSpotifyArt(base64String: string, songName?: string): Promise<{ imageUrl: string; trackInfo?: { name: string; artist: string } }> {
   try {
-    // Extract Spotify ID from base64
-    const { type, id } = extractSpotifyId(base64String)
+    let trackData: SpotifyTrack | null = null
 
-    // Get Spotify access token
-    const token = await getSpotifyToken()
-
-    // Fetch track or album data from Spotify API
-    const endpoint =
-      type === "track" ? `https://api.spotify.com/v1/tracks/${id}` : `https://api.spotify.com/v1/albums/${id}`
-
-    const response = await fetch(endpoint, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    })
-
-    if (!response.ok) {
-      throw new Error(`Failed to fetch ${type} data from Spotify`)
+    // If song name is provided, search for the track
+    if (songName) {
+      trackData = await searchTrack(songName)
     }
 
-    const data = await response.json()
+    // If no track found by name, try to extract ID from base64
+    if (!trackData) {
+      const { type, id } = extractSpotifyId(base64String)
+      const token = await getSpotifyToken()
 
-    // Extract image URL from response
-    let images
-    if (type === "track") {
-      images = (data as SpotifyTrack).album.images
-    } else {
-      images = (data as SpotifyAlbum).images
+      const endpoint = type === "track" 
+        ? `https://api.spotify.com/v1/tracks/${id}`
+        : `https://api.spotify.com/v1/albums/${id}`
+
+      const response = await fetch(endpoint, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      })
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch ${type} data from Spotify`)
+      }
+
+      trackData = await response.json()
     }
 
+    if (!trackData) {
+      throw new Error("No track data found")
+    }
+
+    // Extract image URL and track info
+    const images = trackData.album.images
     if (!images || images.length === 0) {
       throw new Error("No artwork found for this item")
     }
 
-    // Return the highest quality image (usually the first one)
-    return { imageUrl: images[0].url }
+    return {
+      imageUrl: images[0].url,
+      trackInfo: {
+        name: trackData.name,
+        artist: trackData.artists.map(a => a.name).join(", ")
+      }
+    }
   } catch (error) {
     if (error instanceof Error) {
       throw error
